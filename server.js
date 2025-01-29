@@ -1,30 +1,15 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
+const WebSocket = require("ws");
 const axios = require("axios");
 const path = require("path");
 const cors = require("cors");
 
 const app = express();
 const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-const allowedOrigin = "http://127.0.0.1:3001";
-
-app.use(
-  cors({
-    origin: allowedOrigin,
-    credentials: true,
-  })
-);
-
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigin,
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
-
+app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
 // Store active games
@@ -35,71 +20,99 @@ function generateGameCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Fetch images from an API (e.g., Unsplash)
-async function fetchImages(count) {
-  const response = await axios.get(
-    "https://api.unsplash.com/photos/random?client_id=RCBROw8eIDkFR_Dqztm9BDnRGXvVMhDK-7cEQygrCd4&count=" +
-      count
-  );
-  return response.data.map((photo) => photo.urls.small);
+// Broadcast to all clients in a room
+function broadcast(room, message) {
+  wss.clients.forEach((client) => {
+    if (client.room === room && client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(message));
+    }
+  });
 }
 
-// Socket.io connection
-io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
+wss.on("connection", (ws) => {
+  console.log("Client connected");
 
-  // Create a new game
-  socket.on("createGame", async ({ cardSet, cardCount }) => {
-    const gameCode = generateGameCode();
-    const images = await fetchImages(cardCount / 2); // Fetch images for pairs
-    const cards = [...images, ...images].sort(() => Math.random() - 0.5); // Shuffle cards
+  ws.on("message", async (message) => {
+    const data = JSON.parse(message);
 
-    games.set(gameCode, { cards, players: [socket.id], flipped: [] });
-    socket.join(gameCode);
-    socket.emit("gameCreated", { gameCode, cards });
-  });
+    switch (data.type) {
+      case "createGame":
+        const gameCode = generateGameCode();
+        const response = await axios.get(
+          `https://api.unsplash.com/photos/random?client_id=RCBROw8eIDkFR_Dqztm9BDnRGXvVMhDK-7cEQygrCd4&count=${
+            data.cardCount / 2
+          }`
+        );
+        const images = response.data.map((photo) => photo.urls.small);
+        const cards = [...images, ...images].sort(() => Math.random() - 0.5);
 
-  // Join an existing game
-  socket.on("joinGame", ({ gameCode }) => {
-    const game = games.get(gameCode);
-    if (game) {
-      game.players.push(socket.id);
-      socket.join(gameCode);
-      io.to(gameCode).emit("playerJoined", game.players);
-    } else {
-      socket.emit("error", "Game not found");
-    }
-  });
+        games.set(gameCode, {
+          cards,
+          players: [ws],
+          flipped: [],
+        });
 
-  // Handle card flips
-  socket.on("flipCard", ({ gameCode, index }) => {
-    const game = games.get(gameCode);
-    if (game) {
-      game.flipped.push(index);
-      io.to(gameCode).emit("cardFlipped", { index, flipped: game.flipped });
+        ws.room = gameCode;
+        ws.send(
+          JSON.stringify({
+            type: "gameCreated",
+            gameCode,
+            cards,
+          })
+        );
+        break;
 
-      // Check for a match
-      if (game.flipped.length === 2) {
-        const [first, second] = game.flipped;
-        if (game.cards[first] === game.cards[second]) {
-          io.to(gameCode).emit("matchFound", { first, second });
-        } else {
-          setTimeout(() => {
-            io.to(gameCode).emit("resetCards", { first, second });
-          }, 1000);
+      case "joinGame":
+        const game = games.get(data.gameCode);
+        if (game) {
+          game.players.push(ws);
+          ws.room = data.gameCode;
+          broadcast(data.gameCode, {
+            type: "playerJoined",
+            players: game.players.length,
+          });
         }
-        game.flipped = [];
-      }
+        break;
+
+      case "flipCard":
+        const currentGame = games.get(data.gameCode);
+        if (currentGame) {
+          currentGame.flipped.push(data.index);
+          broadcast(data.gameCode, {
+            type: "cardFlipped",
+            index: data.index,
+            flipped: currentGame.flipped,
+          });
+
+          if (currentGame.flipped.length === 2) {
+            const [first, second] = currentGame.flipped;
+            if (currentGame.cards[first] === currentGame.cards[second]) {
+              broadcast(data.gameCode, {
+                type: "matchFound",
+                first,
+                second,
+              });
+            } else {
+              setTimeout(() => {
+                broadcast(data.gameCode, {
+                  type: "resetCards",
+                  first,
+                  second,
+                });
+              }, 1000);
+            }
+            currentGame.flipped = [];
+          }
+        }
+        break;
     }
   });
 
-  // Handle disconnection
-  socket.on("disconnect", () => {
-    console.log("A user disconnected:", socket.id);
+  ws.on("close", () => {
+    console.log("Client disconnected");
   });
 });
 
-// Start the server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
