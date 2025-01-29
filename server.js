@@ -2,10 +2,24 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const axios = require("axios");
+const path = require("path");
+const cors = require("cors");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// Add CORS middleware
+app.use(cors());
+
+const io = new Server(server, {
+  cors: {
+    origin: ["http://localhost:3001", "http://127.0.0.1:3001"],
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+
+app.use(express.static(path.join(__dirname, "public")));
 
 // Store active games
 const games = new Map();
@@ -18,7 +32,8 @@ function generateGameCode() {
 // Fetch images from an API (e.g., Unsplash)
 async function fetchImages(count) {
   const response = await axios.get(
-    `https://api.unsplash.com/photos/random?count=${count}&client_id=YOUR_UNSPLASH_ACCESS_KEY`
+    "https://api.unsplash.com/photos/random?client_id=RCBROw8eIDkFR_Dqztm9BDnRGXvVMhDK-7cEQygrCd4&count=" +
+      count
   );
   return response.data.map((photo) => photo.urls.small);
 }
@@ -77,9 +92,6 @@ io.on("connection", (socket) => {
     console.log("A user disconnected:", socket.id);
   });
 });
-
-// Serve static files
-app.use(express.static("public"));
 
 // Start the server
 const PORT = process.env.PORT || 3001;

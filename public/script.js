@@ -1,4 +1,7 @@
-const socket = io();
+const socket = io("http://localhost:3001", {
+  withCredentials: true,
+  transports: ["polling", "websocket"],
+});
 
 const app = document.getElementById("app");
 const menu = document.getElementById("menu");
