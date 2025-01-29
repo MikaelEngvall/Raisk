@@ -8,12 +8,18 @@ const cors = require("cors");
 const app = express();
 const server = http.createServer(app);
 
-// Add CORS middleware
-app.use(cors());
+const allowedOrigin = "http://127.0.0.1:3001";
+
+app.use(
+  cors({
+    origin: allowedOrigin,
+    credentials: true,
+  })
+);
 
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3001", "http://127.0.0.1:3001"],
+    origin: allowedOrigin,
     methods: ["GET", "POST"],
     credentials: true,
   },
